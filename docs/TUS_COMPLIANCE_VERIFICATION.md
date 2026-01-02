@@ -55,24 +55,20 @@ The `Upload-Length` header is set in the first PATCH request when the size is kn
 #### Scenario B: Length Known After Stream Ends
 If the stream doesn't support seeking or length is unknown:
 ```csharp
-// For deferred length uploads (when size was unknown), send final PATCH to set Upload-Length
-// According to TUS spec: "the Client MUST set the Upload-Length header in the next PATCH request, once the length is known"
-// Reference: https://github.com/tus/tus-resumable-upload-protocol/blob/main/protocol.md
+// After stream ends, send final PATCH using helper method
 if (!totalSize.HasValue && reachedEndOfStream && tusHeadResp.UploadLength < 0)
 {
-    // Send final PATCH with Upload-Length header and empty body
-    httpReqMsg = new HttpRequestMessage(new HttpMethod("PATCH"), reqOption.FileLocation);
-    httpReqMsg.Headers.Add(TusHeaders.TusResumable, reqOption.TusVersion.GetEnumDescription());
-    httpReqMsg.Headers.Add(TusHeaders.UploadLength, uploadedSize.ToString());
-    httpReqMsg.Headers.Add(TusHeaders.UploadOffset, uploadedSize.ToString());
-    reqOption.AddCustomHttpHeaders(httpReqMsg);
-    httpReqMsg.Content = new ByteArrayContent(Array.Empty<byte>());
-    httpReqMsg.Content.Headers.Add(TusHeaders.ContentType, TusHeaders.UploadContentTypeValue);
-    // ... send request
+    response = await SendFinalDeferredLengthPatchAsync(httpClient, reqOption, uploadedSize, ct);
+    var tusVersion = response.GetValueOfHeader(TusHeaders.TusResumable).ConvertToTusVersion();
+    tusPatchResponse.TusResumableVersion = tusVersion;
 }
 ```
 
-After the stream ends and the final size is known, a final PATCH request is sent with the `Upload-Length` header.
+The helper method `SendFinalDeferredLengthPatchAsync` creates and sends a PATCH request with:
+- `Upload-Length` header set to the final size
+- `Upload-Offset` header set to current offset
+- Empty body
+- Appropriate TUS headers
 
 ### Requirement 3: Upload-Length Not Changed
 
