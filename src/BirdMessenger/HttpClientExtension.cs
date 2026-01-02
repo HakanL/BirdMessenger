@@ -431,7 +431,7 @@ public static class HttpClientExtension
                 }
             }
 
-            httpReqMsg.Headers.Add(TusHeaders.UploadOffset, reqOption.Stream.Position.ToString());
+            httpReqMsg.Headers.Add(TusHeaders.UploadOffset, uploadedSize.ToString());
             reqOption.AddCustomHttpHeaders(httpReqMsg);
             httpReqMsg.Content =
                 new ProgressableStreamContent(reqOption.Stream, reqOption.UploadBufferSize, OnUploadProgress);
@@ -466,15 +466,19 @@ public static class HttpClientExtension
                 }
             }
 
-            // For streaming upload, if we successfully sent the request and got a 204 response,
-            // the upload is complete. Check if the final uploadedSize matches totalSize (if known),
-            // or if we successfully completed the request (for deferred length).
-            bool isComplete = totalSize.HasValue ? (totalSize.Value == uploadedSize) : true;
-            
-            if (isComplete && reqOption.OnCompletedAsync is not null)
+            // For streaming upload, if we received a 204 No Content response, the upload is complete.
+            // For known-length uploads, verify the uploadedSize matches the expected totalSize.
+            // For deferred-length uploads, the server's 204 response indicates successful completion.
+            if (reqOption.OnCompletedAsync is not null)
             {
-                UploadCompletedEvent uploadCompletedEvent = new UploadCompletedEvent(reqOption, response);
-                await reqOption.OnCompletedAsync(uploadCompletedEvent);
+                // Verify completion: for known length, sizes must match; for deferred length, server indicated success
+                bool isComplete = !totalSize.HasValue || (totalSize.Value == uploadedSize);
+                
+                if (isComplete)
+                {
+                    UploadCompletedEvent uploadCompletedEvent = new UploadCompletedEvent(reqOption, response);
+                    await reqOption.OnCompletedAsync(uploadCompletedEvent);
+                }
             }
         }
         catch (TusException tusException)
