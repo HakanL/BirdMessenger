@@ -23,17 +23,11 @@ internal sealed class ProgressableStreamContent : HttpContent
         // Try to get the length, but handle streams where Length is not available
         try
         {
-            if (content.CanSeek)
-            {
-                _uploadLength = content.Length - content.Position;
-            }
-            else
-            {
-                _uploadLength = null;
-            }
+            _uploadLength = content.Length - content.Position;
         }
         catch
         {
+            // Stream doesn't support length (e.g., network stream, pipe, etc.)
             _uploadLength = null;
         }
     }
