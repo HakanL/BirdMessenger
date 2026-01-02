@@ -15,6 +15,40 @@ namespace BirdMessenger;
 public static class HttpClientExtension
 {
     /// <summary>
+    /// Sends a final PATCH request to set Upload-Length for deferred uploads.
+    /// According to TUS spec: "the Client MUST set the Upload-Length header in the next PATCH request, once the length is known"
+    /// </summary>
+    private static async Task<HttpResponseMessage> SendFinalDeferredLengthPatchAsync(
+        HttpClient httpClient,
+        TusPatchRequestOption reqOption,
+        long uploadedSize,
+        CancellationToken ct)
+    {
+        var httpReqMsg = new HttpRequestMessage(new HttpMethod("PATCH"), reqOption.FileLocation);
+        httpReqMsg.Headers.Add(TusHeaders.TusResumable, reqOption.TusVersion.GetEnumDescription());
+        httpReqMsg.Headers.Add(TusHeaders.UploadLength, uploadedSize.ToString());
+        httpReqMsg.Headers.Add(TusHeaders.UploadOffset, uploadedSize.ToString());
+        reqOption.AddCustomHttpHeaders(httpReqMsg);
+        httpReqMsg.Content = new ByteArrayContent(Array.Empty<byte>());
+        httpReqMsg.Content.Headers.Add(TusHeaders.ContentType, TusHeaders.UploadContentTypeValue);
+
+        if (reqOption.OnPreSendRequestAsync is not null)
+        {
+            PreSendRequestEvent preSendRequestEvent = new PreSendRequestEvent(reqOption, httpReqMsg);
+            await reqOption.OnPreSendRequestAsync(preSendRequestEvent);
+        }
+
+        var response = await httpClient.SendAsync(httpReqMsg, ct);
+        
+        if (response.StatusCode != HttpStatusCode.NoContent)
+        {
+            throw new TusException($"patch response statusCode is {response.StatusCode.ToString()}",httpReqMsg,response);
+        }
+
+        return response;
+    }
+
+    /// <summary>
     /// create a url for file upload
     /// </summary>
     /// <param name="reqOption"></param>
@@ -281,30 +315,7 @@ public static class HttpClientExtension
             // Reference: https://github.com/tus/tus-resumable-upload-protocol/blob/main/protocol.md
             if (!totalSize.HasValue && reachedEndOfStream && tusHeadResp.UploadLength < 0)
             {
-                // Send final PATCH with Upload-Length header and empty body
-                httpReqMsg = new HttpRequestMessage(new HttpMethod("PATCH"), reqOption.FileLocation);
-                httpReqMsg.Headers.Add(TusHeaders.TusResumable, reqOption.TusVersion.GetEnumDescription());
-                httpReqMsg.Headers.Add(TusHeaders.UploadLength, uploadedSize.ToString());
-                httpReqMsg.Headers.Add(TusHeaders.UploadOffset, uploadedSize.ToString());
-                reqOption.AddCustomHttpHeaders(httpReqMsg);
-                httpReqMsg.Content = new ByteArrayContent(Array.Empty<byte>());
-                httpReqMsg.Content.Headers.Add(TusHeaders.ContentType, TusHeaders.UploadContentTypeValue);
-
-                if (reqOption.OnPreSendRequestAsync is not null)
-                {
-                    PreSendRequestEvent preSendRequestEvent = new PreSendRequestEvent(reqOption, httpReqMsg);
-                    await reqOption.OnPreSendRequestAsync(preSendRequestEvent);
-                }
-
-                tusPatchResponse.OriginHttpRequestMessage = httpReqMsg;
-
-                response = await httpClient.SendAsync(httpReqMsg, ct);
-                
-                if (response.StatusCode != HttpStatusCode.NoContent)
-                {
-                    throw new TusException($"patch response statusCode is {response.StatusCode.ToString()}",httpReqMsg,response);
-                }
-
+                response = await SendFinalDeferredLengthPatchAsync(httpClient, reqOption, uploadedSize, ct);
                 var tusVersion = response.GetValueOfHeader(TusHeaders.TusResumable).ConvertToTusVersion();
                 tusPatchResponse.TusResumableVersion = tusVersion;
             }
@@ -507,30 +518,7 @@ public static class HttpClientExtension
             // Reference: https://github.com/tus/tus-resumable-upload-protocol/blob/main/protocol.md
             if (!totalSize.HasValue && tusHeadResp.UploadLength < 0)
             {
-                // Send final PATCH with Upload-Length header and empty body
-                httpReqMsg = new HttpRequestMessage(new HttpMethod("PATCH"), reqOption.FileLocation);
-                httpReqMsg.Headers.Add(TusHeaders.TusResumable, reqOption.TusVersion.GetEnumDescription());
-                httpReqMsg.Headers.Add(TusHeaders.UploadLength, uploadedSize.ToString());
-                httpReqMsg.Headers.Add(TusHeaders.UploadOffset, uploadedSize.ToString());
-                reqOption.AddCustomHttpHeaders(httpReqMsg);
-                httpReqMsg.Content = new ByteArrayContent(Array.Empty<byte>());
-                httpReqMsg.Content.Headers.Add(TusHeaders.ContentType, TusHeaders.UploadContentTypeValue);
-
-                if (reqOption.OnPreSendRequestAsync is not null)
-                {
-                    PreSendRequestEvent preSendRequestEvent = new PreSendRequestEvent(reqOption, httpReqMsg);
-                    await reqOption.OnPreSendRequestAsync(preSendRequestEvent);
-                }
-
-                tusPatchResponse.OriginHttpRequestMessage = httpReqMsg;
-
-                response = await httpClient.SendAsync(httpReqMsg, ct);
-                
-                if (response.StatusCode != HttpStatusCode.NoContent)
-                {
-                    throw new TusException($"patch response statusCode is {response.StatusCode.ToString()}",httpReqMsg,response);
-                }
-
+                response = await SendFinalDeferredLengthPatchAsync(httpClient, reqOption, uploadedSize, ct);
                 var finalTusVersion = response.GetValueOfHeader(TusHeaders.TusResumable).ConvertToTusVersion();
                 tusPatchResponse.TusResumableVersion = finalTusVersion;
             }
