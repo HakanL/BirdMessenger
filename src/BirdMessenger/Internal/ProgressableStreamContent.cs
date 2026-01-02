@@ -13,6 +13,7 @@ internal sealed class ProgressableStreamContent : HttpContent
     private readonly uint _uploadBufferSize;
     private readonly long? _uploadLength;
     private readonly Func<long, Task> _uploadProgress;
+    private long _uploadedBytes;
 
     public ProgressableStreamContent(Stream content, uint uploadBufferSize, Func<long, Task> uploadProgress)
     {
@@ -23,7 +24,10 @@ internal sealed class ProgressableStreamContent : HttpContent
         // Try to get the length, but handle streams where Length is not available
         try
         {
-            _uploadLength = content.Length - content.Position;
+            if (content.CanSeek)
+            {
+                _uploadLength = content.Length - content.Position;
+            }
         }
         catch
         {
@@ -38,31 +42,33 @@ internal sealed class ProgressableStreamContent : HttpContent
     }
 
 #if NET5_0_OR_GREATER
-        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context,
-            CancellationToken cancellationToken)
-        {
-            return SerializeToStreamAsync(stream, cancellationToken);
-        }
+    protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context,
+        CancellationToken cancellationToken)
+    {
+        return SerializeToStreamAsync(stream, cancellationToken);
+    }
 
-        private async Task SerializeToStreamAsync(Stream stream,
-            CancellationToken ct)
-        {
-            var buffer = new byte[_uploadBufferSize].AsMemory();
+    private async Task SerializeToStreamAsync(Stream stream,
+        CancellationToken ct)
+    {
+        var buffer = new byte[_uploadBufferSize].AsMemory();
 
-            while (true)
+        while (true)
+        {
+            var bytesRead = await _content.ReadAsync(buffer, ct);
+
+            if (bytesRead <= 0)
             {
-                var bytesRead = await _content.ReadAsync(buffer, ct);
-
-                if (bytesRead <= 0)
-                {
-                    break;
-                }
-
-                await stream.WriteAsync(buffer[..bytesRead], ct);
-
-                await _uploadProgress(_content.Position);
+                break;
             }
+
+            await stream.WriteAsync(buffer[..bytesRead], ct);
+
+            _uploadedBytes += bytesRead;
+
+            await _uploadProgress(_uploadedBytes);
         }
+    }
 #else
     private async Task SerializeToStreamAsync(Stream stream,
         CancellationToken ct)
@@ -80,7 +86,9 @@ internal sealed class ProgressableStreamContent : HttpContent
 
             await stream.WriteAsync(buffer, 0, bytesRead, ct);
 
-            await _uploadProgress(_content.Position);
+            _uploadedBytes += bytesRead;
+
+            await _uploadProgress(_uploadedBytes);
         }
     }
 #endif
@@ -91,7 +99,7 @@ internal sealed class ProgressableStreamContent : HttpContent
             length = _uploadLength.Value;
             return true;
         }
-        
+
         length = 0;
         return false;
     }
