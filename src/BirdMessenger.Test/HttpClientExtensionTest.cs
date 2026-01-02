@@ -314,6 +314,6 @@ public class HttpClientExtensionTest
         var resp = await httpClient.TusOptionAsync(tusOptionRequestOption, CancellationToken.None);
         
         Assert.Equal(TusVersion.V1_0_0, resp.TusResumableVersion);
-        Assert.True(resp.TusVersions.Contains("1.0.0"));
+        Assert.Contains("1.0.0", resp.TusVersions);
     }
 }

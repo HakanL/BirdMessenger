@@ -9,9 +9,9 @@
 
     <ItemGroup>
       <None Remove="TestFile\test.txt" />
-      <AdditionalFiles Include="TestFile\test.txt">
+      <Content Include="TestFile\test.txt">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      </AdditionalFiles>
+      </Content>
     </ItemGroup>
 
     <ItemGroup>
