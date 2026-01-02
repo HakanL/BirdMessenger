@@ -206,7 +206,7 @@ public static class HttpClientExtension
 
             var tusHeadResp = await httpClient.TusHeadAsync(tusHeadRequestOption, ct);
             uploadedSize = tusHeadResp.UploadOffset;
-            if (uploadedSize != reqOption.Stream.Position)
+            if (reqOption.Stream.CanSeek && uploadedSize != reqOption.Stream.Position)
             {
                 reqOption.Stream.Seek(uploadedSize, SeekOrigin.Begin);
             }
@@ -407,7 +407,7 @@ public static class HttpClientExtension
             var tusHeadResp = await httpClient.TusHeadAsync(tusHeadRequestOption, ct);
             uploadedSize = tusHeadResp.UploadOffset;
 
-            if (uploadedSize != reqOption.Stream.Position)
+            if (reqOption.Stream.CanSeek && uploadedSize != reqOption.Stream.Position)
             {
                 reqOption.Stream.Seek(uploadedSize, SeekOrigin.Begin);
             }
