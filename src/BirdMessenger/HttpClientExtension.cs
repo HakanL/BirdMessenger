@@ -174,7 +174,20 @@ public static class HttpClientExtension
     /// <returns></returns>
     private static async Task<TusPatchResponse> TusPatchWithChunkAsync(HttpClient httpClient,TusPatchRequestOption reqOption, CancellationToken ct = default)
     {
-        long totalSize = reqOption.Stream.Length;
+        // Try to get total size, but handle streams where Length is not available
+        long? totalSize = null;
+        try
+        {
+            if (reqOption.Stream.CanSeek)
+            {
+                totalSize = reqOption.Stream.Length;
+            }
+        }
+        catch
+        {
+            // Stream doesn't support length - use deferred length
+        }
+        
         long uploadedSize = 0;
         TusPatchResponse tusPatchResponse = new TusPatchResponse();
         HttpRequestMessage httpReqMsg = null;
@@ -193,25 +206,39 @@ public static class HttpClientExtension
 
             var tusHeadResp = await httpClient.TusHeadAsync(tusHeadRequestOption, ct);
             uploadedSize = tusHeadResp.UploadOffset;
-            if (uploadedSize != reqOption.Stream.Position)
+            if (reqOption.Stream.CanSeek && uploadedSize != reqOption.Stream.Position)
             {
                 reqOption.Stream.Seek(uploadedSize, SeekOrigin.Begin);
             }
 
             var buffer = new byte[reqOption.UploadBufferSize];
+            bool reachedEndOfStream = false;
             while (!ct.IsCancellationRequested)
             {
-                if (totalSize == uploadedSize)
+                // For streams with known length, check if we're done
+                if (totalSize.HasValue && totalSize.Value == uploadedSize)
                 {
                     break;
                 }
 
                 var bytesReadCount = await reqOption.Stream.ReadAsync(buffer, 0, buffer.Length, ct);
+                
+                // For streams without known length, check for end of stream
+                if (bytesReadCount <= 0)
+                {
+                    reachedEndOfStream = true;
+                    break;
+                }
+                
                 httpReqMsg = new HttpRequestMessage(new HttpMethod("PATCH"), reqOption.FileLocation);
                 httpReqMsg.Headers.Add(TusHeaders.TusResumable, reqOption.TusVersion.GetEnumDescription());
                 if (tusHeadResp.UploadLength < 0)
                 {
-                    httpReqMsg.Headers.Add(TusHeaders.UploadLength, totalSize.ToString());
+                    // Only set Upload-Length if we know the total size
+                    if (totalSize.HasValue)
+                    {
+                        httpReqMsg.Headers.Add(TusHeaders.UploadLength, totalSize.Value.ToString());
+                    }
                 }
 
                 httpReqMsg.Headers.Add(TusHeaders.UploadOffset, uploadedSize.ToString());
@@ -249,13 +276,14 @@ public static class HttpClientExtension
                 }
             }
 
-            if (totalSize == uploadedSize)
+            // Check if upload is complete - for known length, check if we uploaded all bytes
+            // For deferred length, check if we reached end of stream
+            bool isComplete = totalSize.HasValue ? (totalSize.Value == uploadedSize) : reachedEndOfStream;
+            
+            if (isComplete && reqOption.OnCompletedAsync is not null)
             {
-                if (reqOption.OnCompletedAsync is not null)
-                {
-                    UploadCompletedEvent uploadCompletedEvent = new UploadCompletedEvent(reqOption, response);
-                    await reqOption.OnCompletedAsync(uploadCompletedEvent);
-                }
+                UploadCompletedEvent uploadCompletedEvent = new UploadCompletedEvent(reqOption, response);
+                await reqOption.OnCompletedAsync(uploadCompletedEvent);
             }
         }
         catch (TusException tusException)
@@ -349,7 +377,20 @@ public static class HttpClientExtension
     private static async Task<TusPatchResponse> TusPatchWithStreamingAsync(HttpClient httpClient, TusPatchRequestOption reqOption,
         CancellationToken ct)
     {
-        long totalSize = reqOption.Stream.Length;
+        // Try to get total size, but handle streams where Length is not available
+        long? totalSize = null;
+        try
+        {
+            if (reqOption.Stream.CanSeek)
+            {
+                totalSize = reqOption.Stream.Length;
+            }
+        }
+        catch
+        {
+            // Stream doesn't support length - use deferred length
+        }
+        
         long uploadedSize = 0;
         TusPatchResponse tusPatchResponse = new TusPatchResponse();
         HttpRequestMessage httpReqMsg = null;
@@ -369,7 +410,7 @@ public static class HttpClientExtension
             var tusHeadResp = await httpClient.TusHeadAsync(tusHeadRequestOption, ct);
             uploadedSize = tusHeadResp.UploadOffset;
 
-            if (uploadedSize != reqOption.Stream.Position)
+            if (reqOption.Stream.CanSeek && uploadedSize != reqOption.Stream.Position)
             {
                 reqOption.Stream.Seek(uploadedSize, SeekOrigin.Begin);
             }
@@ -383,10 +424,14 @@ public static class HttpClientExtension
             httpReqMsg.Headers.Add(TusHeaders.TusResumable, reqOption.TusVersion.GetEnumDescription());
             if (tusHeadResp.UploadLength < 0)
             {
-                httpReqMsg.Headers.Add(TusHeaders.UploadLength, totalSize.ToString());
+                // Only set Upload-Length if we know the total size
+                if (totalSize.HasValue)
+                {
+                    httpReqMsg.Headers.Add(TusHeaders.UploadLength, totalSize.Value.ToString());
+                }
             }
 
-            httpReqMsg.Headers.Add(TusHeaders.UploadOffset, reqOption.Stream.Position.ToString());
+            httpReqMsg.Headers.Add(TusHeaders.UploadOffset, uploadedSize.ToString());
             reqOption.AddCustomHttpHeaders(httpReqMsg);
             httpReqMsg.Content =
                 new ProgressableStreamContent(reqOption.Stream, reqOption.UploadBufferSize, OnUploadProgress);
@@ -407,23 +452,30 @@ public static class HttpClientExtension
             }
 
             var tusVersion = response.GetValueOfHeader(TusHeaders.TusResumable).ConvertToTusVersion();
-            uploadedSize = long.Parse(response.GetValueOfHeader(TusHeaders.UploadOffset));
+            var serverUploadedSize = long.Parse(response.GetValueOfHeader(TusHeaders.UploadOffset));
 
             tusPatchResponse.TusResumableVersion = tusVersion;
 
             async Task OnUploadProgress(long offset)
             {
-                uploadedSize = offset;
-                uploadProgressEvent.UploadedSize = uploadedSize;
+                uploadProgressEvent.UploadedSize = offset;
                 if (reqOption.OnProgressAsync is not null)
                 {
                     await reqOption.OnProgressAsync(uploadProgressEvent);
                 }
             }
 
-            if (totalSize == uploadedSize)
+            // The server responded with 204 No Content, indicating successful upload.
+            // The Upload-Offset header contains the total bytes received by the server.
+            uploadedSize = serverUploadedSize;
+            
+            // For streaming upload with known length, verify server received expected amount
+            // For deferred-length, the server's 204 response confirms successful completion
+            if (reqOption.OnCompletedAsync is not null)
             {
-                if (reqOption.OnCompletedAsync is not null)
+                bool isComplete = !totalSize.HasValue || (totalSize.Value == uploadedSize);
+                
+                if (isComplete)
                 {
                     UploadCompletedEvent uploadCompletedEvent = new UploadCompletedEvent(reqOption, response);
                     await reqOption.OnCompletedAsync(uploadCompletedEvent);
