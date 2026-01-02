@@ -11,7 +11,7 @@ internal sealed class ProgressableStreamContent : HttpContent
 {
     private readonly Stream _content;
     private readonly uint _uploadBufferSize;
-    private readonly long _uploadLength;
+    private readonly long? _uploadLength;
     private readonly Func<long, Task> _uploadProgress;
 
     public ProgressableStreamContent(Stream content, uint uploadBufferSize, Func<long, Task> uploadProgress)
@@ -20,7 +20,22 @@ internal sealed class ProgressableStreamContent : HttpContent
         _uploadBufferSize = uploadBufferSize;
         _uploadProgress = uploadProgress;
 
-        _uploadLength = content.Length - content.Position;
+        // Try to get the length, but handle streams where Length is not available
+        try
+        {
+            if (content.CanSeek)
+            {
+                _uploadLength = content.Length - content.Position;
+            }
+            else
+            {
+                _uploadLength = null;
+            }
+        }
+        catch
+        {
+            _uploadLength = null;
+        }
     }
 
     protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context)
@@ -77,9 +92,14 @@ internal sealed class ProgressableStreamContent : HttpContent
 #endif
     protected override bool TryComputeLength(out long length)
     {
-        length = _uploadLength;
-
-        return true;
+        if (_uploadLength.HasValue)
+        {
+            length = _uploadLength.Value;
+            return true;
+        }
+        
+        length = 0;
+        return false;
     }
 
     protected override void Dispose(bool disposing)
