@@ -452,26 +452,27 @@ public static class HttpClientExtension
             }
 
             var tusVersion = response.GetValueOfHeader(TusHeaders.TusResumable).ConvertToTusVersion();
-            uploadedSize = long.Parse(response.GetValueOfHeader(TusHeaders.UploadOffset));
+            var serverUploadedSize = long.Parse(response.GetValueOfHeader(TusHeaders.UploadOffset));
 
             tusPatchResponse.TusResumableVersion = tusVersion;
 
             async Task OnUploadProgress(long offset)
             {
-                uploadedSize = offset;
-                uploadProgressEvent.UploadedSize = uploadedSize;
+                uploadProgressEvent.UploadedSize = offset;
                 if (reqOption.OnProgressAsync is not null)
                 {
                     await reqOption.OnProgressAsync(uploadProgressEvent);
                 }
             }
 
-            // For streaming upload, if we received a 204 No Content response, the upload is complete.
-            // For known-length uploads, verify the uploadedSize matches the expected totalSize.
-            // For deferred-length uploads, the server's 204 response indicates successful completion.
+            // The server responded with 204 No Content, indicating successful upload.
+            // The Upload-Offset header contains the total bytes received by the server.
+            uploadedSize = serverUploadedSize;
+            
+            // For streaming upload with known length, verify server received expected amount
+            // For deferred-length, the server's 204 response confirms successful completion
             if (reqOption.OnCompletedAsync is not null)
             {
-                // Verify completion: for known length, sizes must match; for deferred length, server indicated success
                 bool isComplete = !totalSize.HasValue || (totalSize.Value == uploadedSize);
                 
                 if (isComplete)
