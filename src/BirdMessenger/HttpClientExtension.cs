@@ -212,6 +212,7 @@ public static class HttpClientExtension
             }
 
             var buffer = new byte[reqOption.UploadBufferSize];
+            bool reachedEndOfStream = false;
             while (!ct.IsCancellationRequested)
             {
                 // For streams with known length, check if we're done
@@ -225,6 +226,7 @@ public static class HttpClientExtension
                 // For streams without known length, check for end of stream
                 if (bytesReadCount <= 0)
                 {
+                    reachedEndOfStream = true;
                     break;
                 }
                 
@@ -274,8 +276,9 @@ public static class HttpClientExtension
                 }
             }
 
-            // Check if upload is complete
-            bool isComplete = totalSize.HasValue ? (totalSize.Value == uploadedSize) : (uploadedSize > 0);
+            // Check if upload is complete - for known length, check if we uploaded all bytes
+            // For deferred length, check if we reached end of stream
+            bool isComplete = totalSize.HasValue ? (totalSize.Value == uploadedSize) : reachedEndOfStream;
             
             if (isComplete && reqOption.OnCompletedAsync is not null)
             {
@@ -463,8 +466,10 @@ public static class HttpClientExtension
                 }
             }
 
-            // Check if upload is complete
-            bool isComplete = totalSize.HasValue ? (totalSize.Value == uploadedSize) : (uploadedSize > 0);
+            // For streaming upload, if we successfully sent the request and got a 204 response,
+            // the upload is complete. Check if the final uploadedSize matches totalSize (if known),
+            // or if we successfully completed the request (for deferred length).
+            bool isComplete = totalSize.HasValue ? (totalSize.Value == uploadedSize) : true;
             
             if (isComplete && reqOption.OnCompletedAsync is not null)
             {
